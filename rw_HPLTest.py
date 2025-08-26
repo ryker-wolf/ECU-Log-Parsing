@@ -126,12 +126,71 @@ class Enum15(IntEnum): # any of the const values that are unnamed I was simply t
     timeMillisecond = 254
     timeMicrosecond = 255
 
+class decompressedData:
+    def __init__(self):
+        self.data = None
+        self.dataPosition = 0
+    
+    def reset(self, data):
+        self.data = data
+        self.dataPosition = 0
+
+    def read(self, ctx):
+        temp = []
+        for b in range(0, ctx):
+            temp.append(self.data[self.dataPosition])
+            self.dataPosition = self.dataPosition + 1
+        return temp
+
+    def readByte(self):
+        return self.read(1)[0]
+
+    def readInt32(self):
+        firstByte = self.readByte()
+        result = (self.readByte() << 8) | firstByte
+        self.read(2) # add some padding?
+        return result
+
+    def read7BitEncodedInt(self):
+        num = 0
+        num2 = 0
+        while num2 != 35:
+            b = self.readByte()
+            num |= (b & 127) << num2
+            num2 += 7
+            if (b & 128) == 0:
+                return num
+        raise ValueError("Format_Bad7BitInt32") # 1:1 from dnspy
+
+    def readString(self):
+        strLength = self.read7BitEncodedInt()
+        if strLength:
+            strBytes = self.read(strLength)
+            strr = bytes(strBytes).decode('utf-8')
+            return strr
+
+    def readDouble(self):
+        buffer = self.read(8)
+        num = (buffer[0] | (buffer[1] << 8) | (buffer[2] << 16) | 
+            (buffer[3] << 24))
+        num2 = (buffer[4] | (buffer[5] << 8) | (buffer[6] << 16) | 
+                (buffer[7] << 24))
+        num3 = (num2 << 32) | num
+        return struct.unpack('d', num3.to_bytes(8, 'little'))[0]
+
+    def readInt64(self):
+        buffer = self.read(8)
+        num = (buffer[0] | (buffer[1] << 8) | (buffer[2] << 16) | 
+               (buffer[3] << 24))
+        num2 = (buffer[4] | (buffer[5] << 8) | (buffer[6] << 16) | 
+                (buffer[7] << 24))
+        return (num2 << 32) | num
+
 class HPLLoader:
     def __init__(self, logPath):
         self.logPath = logPath
         self.log = open(self.logPath, 'rb')
-        self.data = None
-        self.dataPosition = 0
+        self.data = decompressedData()
     
     def hexStr(self, data):
         hexBytes = " ".join(f"0x{b:02X}" for b in data) # idfk what im doing
@@ -160,98 +219,40 @@ class HPLLoader:
         AESKey = self.log.read(16)
         print(f"AES key: {self.hexStr(AESKey)}") # you can use the AES key to decrypt the information related to the vehicle, I found no use in it :) (things like the VIN)
 
-    def readData(self, amt):
-        temp = []
-        for b in range(0, amt):
-            temp.append(self.data[self.dataPosition])
-            self.dataPosition = self.dataPosition + 1
-        return temp
-
-    def readDataSingle(self):
-        return self.readData(1)[0] # i got tired of typing brackets
-
-    def readDataInt32(self):
-        firstByte = self.readDataSingle()
-        result = (self.readDataSingle() << 8) | firstByte
-        self.readData(2) # add some padding?
-        return result
-
-    def read7BitEncodedInt(self):
-        num = 0
-        num2 = 0
-        while num2 != 35:
-            b = self.readDataSingle()
-            num |= (b & 127) << num2
-            num2 += 7
-            if (b & 128) == 0:
-                return num
-        raise ValueError("Format_Bad7BitInt32") # 1:1 from dnspy
-
-    def readString(self):
-        strLength = self.read7BitEncodedInt()
-        if strLength:
-            strBytes = self.readData(strLength)
-            strr = bytes(strBytes).decode('utf-8')
-            return strr
-
-    def readDouble(self):
-        buffer = self.readData(8)
-        num = (buffer[0] | (buffer[1] << 8) | (buffer[2] << 16) | 
-            (buffer[3] << 24))
-        num2 = (buffer[4] | (buffer[5] << 8) | (buffer[6] << 16) | 
-                (buffer[7] << 24))
-        num3 = (num2 << 32) | num
-        return struct.unpack('d', num3.to_bytes(8, 'little'))[0]
-
-    def readInt64(self):
-        buffer = self.readData(8)
-        num = (buffer[0] | (buffer[1] << 8) | (buffer[2] << 16) | 
-               (buffer[3] << 24))
-        num2 = (buffer[4] | (buffer[5] << 8) | (buffer[6] << 16) | 
-                (buffer[7] << 24))
-        return (num2 << 32) | num
-
     def setData(self, dataLength):
-        self.data = zlib.decompress(self.log.read(dataLength), wbits=-zlib.MAX_WBITS) # the data is compressed, must decompress it to read
-        self.dataPosition = 0
+        self.data.reset(zlib.decompress(self.log.read(dataLength), wbits=-zlib.MAX_WBITS))  # the data is compressed, must decompress it to read
 
     def rebuildReader(self):
         print("Parsing HPL file...")
         out = open("hpl_output.txt", "w")
 
-        logSize = self.readInt32()
-        self.log.read(logSize)
-        channelCount = int(self.log.read(1).hex(), 16)
-        self.skip(1)
+        aesBlockSize = self.readInt32()
+        self.log.read(aesBlockSize) # skip over the aes data, we don't use it
 
-        out.write(f"Log size: {logSize}\nChannel count: {channelCount}\n")
+        channelCount = self.readInt32()
+
+        out.write(f"AES block size: {aesBlockSize}\nChannel count: {channelCount}\n")
         for ch in range(0, channelCount):
             dataLength = self.readInt32()
             self.skip(2) # more buffer, this may become used if the file gets big enough?
             self.setData(dataLength)
-            channelId = self.readDataInt32()
-            self.readString()
-            dataType = self.readData(1)[0]
+            channelId = self.data.readInt32()
+            self.data.readString() # this string is used for something... I can't remember what though
+            dataType = self.data.readByte() # get the data type byte
             eDataType = Enum15(dataType)
-            interval = self.readDataInt32()
-            dataCount = self.readDataInt32()
+            interval = self.data.readInt32()
+            dataCount = self.data.readInt32()
 
             out.write(f"channelId: {channelId}\ndataType: {dataType} | {hex(dataType)} | {eDataType.name}\ninterval: {interval}\ncount: {dataCount}\n")
             for x in range(0, dataCount):
+                dateTime = self.data.readInt64()
+                end = ", "
+                if x == dataCount - 1:
+                    end = "" # yea, there's a better way to do this
                 if eDataType:
-                    dateTime = self.readInt64()
-                    val = self.readDouble()
-                    end = ", "
-                    if x == dataCount - 1:
-                        end = ""
-                    out.write(f"{val}{end}") # NOTE: no conversions have been done. You can do the conversions based off the Enum15 type
-                else: # things like "On/Off"
-                    dateTime = self.readInt64()
-                    strr = self.readString()
-                    end = ", "
-                    if x == dataCount - 1:
-                        end = ""
-                    out.write(f"{strr}{end}")
+                    out.write(f"{self.data.readDouble()}{end}") # NOTE: no conversions have been done. You can do the conversions based off the Enum15 type
+                else:
+                    out.write(f"{self.data.readString()}{end}")
             out.write("\n")
         out.close()
         print("Done!")
