@@ -139,7 +139,7 @@ class HPLLoader:
 
     def ensureHPTunersFormat(self):
         fileCode = self.log.read(3).hex()
-        return fileCode == str("HPT").encode('utf-8').hex() # make sure its a HPT formatted file
+        return fileCode == str("HPT").encode("utf-8").hex() # make sure its a HPT formatted file
 
     def ensureType(self):
         if not self.ensureHPTunersFormat():
@@ -173,7 +173,7 @@ class HPLLoader:
     def readDataInt32(self):
         firstByte = self.readDataSingle()
         result = (self.readDataSingle() << 8) | firstByte
-        self.readData(2) # add some padding? (spoiler, thats not why)
+        self.readData(2) # add some padding?
         return result
 
     def read7BitEncodedInt(self):
@@ -185,12 +185,14 @@ class HPLLoader:
             num2 += 7
             if (b & 128) == 0:
                 return num
-        raise ValueError("Format_Bad7BitInt32") # 1:1 from dnspy lol
+        raise ValueError("Format_Bad7BitInt32") # 1:1 from dnspy
 
     def readString(self):
         strLength = self.read7BitEncodedInt()
         if strLength:
-            return bytes(self.readData(strLength)).decode('utf-8')
+            strBytes = self.readData(strLength)
+            strr = bytes(strBytes).decode('utf-8')
+            return strr
 
     def readDouble(self):
         buffer = self.readData(8)
@@ -210,24 +212,17 @@ class HPLLoader:
         return (num2 << 32) | num
 
     def setData(self, dataLength):
-        self.data = zlib.decompress(self.log.read(dataLength), wbits=-zlib.MAX_WBITS) # log file is compressed, we must decompress it
+        self.data = zlib.decompress(self.log.read(dataLength), wbits=-zlib.MAX_WBITS) # the data is compressed, must decompress it to read
         self.dataPosition = 0
-
-    def rebuiltGetAesData(self):
-        aesDataLength = self.readInt32()
-        self.skip(aesDataLength) # I have no use for the encrypted data, you can find the function in dnspy and rebuild if you need it that bad
 
     def rebuildReader(self):
         print("Parsing HPL file...")
-
-        aesDataLength = self.readInt32()
         out = open("hpl_output.txt", "w")
-        self.skip(aesDataLength) # we don't need that data lol
-        self.rebuiltGetAesData()
 
+        logSize = self.readInt32()
+        self.log.read(logSize)
         channelCount = int(self.log.read(1).hex(), 16)
-        self.skip(1) # this may become an issue, I didn't want to add proper 2 byte int checking when I started and now I don't feel like adding it at the end
-        # basically if the file has too many channels (>255) this could become an issue
+        self.skip(1)
 
         out.write(f"Log size: {logSize}\nChannel count: {channelCount}\n")
         for ch in range(0, channelCount):
@@ -235,7 +230,7 @@ class HPLLoader:
             self.skip(2) # more buffer, this may become used if the file gets big enough?
             self.setData(dataLength)
             channelId = self.readDataInt32()
-            self.readString() # this string really doesn't get used, it has a purpose I just forget now
+            self.readString()
             dataType = self.readData(1)[0]
             eDataType = Enum15(dataType)
             interval = self.readDataInt32()
