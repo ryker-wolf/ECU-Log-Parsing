@@ -139,7 +139,7 @@ class HPLLoader:
 
     def ensureHPTunersFormat(self):
         fileCode = self.log.read(3).hex()
-        return fileCode == str("HPT").encode("utf-8").hex() # make sure its a HPT formatted file
+        return fileCode == str("HPT").encode('utf-8').hex() # make sure its a HPT formatted file
 
     def ensureType(self):
         if not self.ensureHPTunersFormat():
@@ -149,8 +149,8 @@ class HPLLoader:
         return logCode == "2060" # this makes sure its a log file
 
     def readInt32(self):
-        first_byte = self.log.read(1)[0]
-        result = (self.log.read(1)[0] << 8) | first_byte
+        firstByte = self.log.read(1)[0]
+        result = (self.log.read(1)[0] << 8) | firstByte
         return result
 
     def skip(self, amt):
@@ -171,9 +171,9 @@ class HPLLoader:
         return self.readData(1)[0] # i got tired of typing brackets
 
     def readDataInt32(self):
-        first_byte = self.readDataSingle()
-        result = (self.readDataSingle() << 8) | first_byte
-        self.readData(2) # add some padding?
+        firstByte = self.readDataSingle()
+        result = (self.readDataSingle() << 8) | firstByte
+        self.readData(2) # add some padding? (spoiler, thats not why)
         return result
 
     def read7BitEncodedInt(self):
@@ -185,14 +185,12 @@ class HPLLoader:
             num2 += 7
             if (b & 128) == 0:
                 return num
-        raise ValueError("Format_Bad7BitInt32")
+        raise ValueError("Format_Bad7BitInt32") # 1:1 from dnspy lol
 
     def readString(self):
         strLength = self.read7BitEncodedInt()
         if strLength:
-            data_bytes = self.readData(strLength)
-            strr = bytes(data_bytes).decode("utf-8")
-            return strr
+            return bytes(self.readData(strLength)).decode('utf-8')
 
     def readDouble(self):
         buffer = self.readData(8)
@@ -212,32 +210,38 @@ class HPLLoader:
         return (num2 << 32) | num
 
     def setData(self, dataLength):
-        self.data = zlib.decompress(self.log.read(dataLength), wbits=-zlib.MAX_WBITS)
+        self.data = zlib.decompress(self.log.read(dataLength), wbits=-zlib.MAX_WBITS) # log file is compressed, we must decompress it
         self.dataPosition = 0
+
+    def rebuiltGetAesData(self):
+        aesDataLength = self.readInt32()
+        self.skip(aesDataLength) # I have no use for the encrypted data, you can find the function in dnspy and rebuild if you need it that bad
 
     def rebuildReader(self):
         print("Parsing HPL file...")
-        logSize = self.readInt32()
-        output_file = open("hpl_output.txt", "w")
-        output_file.write(f"Log size: {logSize}\n")
-        self.log.read(logSize)
+
+        aesDataLength = self.readInt32()
+        out = open("hpl_output.txt", "w")
+        self.skip(aesDataLength) # we don't need that data lol
+        self.rebuiltGetAesData()
+
         channelCount = int(self.log.read(1).hex(), 16)
-        output_file.write(f"Channel count: {channelCount}\n")
-        self.skip(1)
+        self.skip(1) # this may become an issue, I didn't want to add proper 2 byte int checking when I started and now I don't feel like adding it at the end
+        # basically if the file has too many channels (>255) this could become an issue
+
+        out.write(f"Log size: {logSize}\nChannel count: {channelCount}\n")
         for ch in range(0, channelCount):
             dataLength = self.readInt32()
             self.skip(2) # more buffer, this may become used if the file gets big enough?
             self.setData(dataLength)
             channelId = self.readDataInt32()
-            output_file.write(f"channelId: {channelId}\n")
-            self.readString()
+            self.readString() # this string really doesn't get used, it has a purpose I just forget now
             dataType = self.readData(1)[0]
             eDataType = Enum15(dataType)
-            output_file.write(f"dataType: {dataType} | {hex(dataType)} | {eDataType.name}\n")
             interval = self.readDataInt32()
-            output_file.write(f"interval: {interval}\n")
             dataCount = self.readDataInt32()
-            output_file.write(f"dataCount: {dataCount}\n")
+
+            out.write(f"channelId: {channelId}\ndataType: {dataType} | {hex(dataType)} | {eDataType.name}\ninterval: {interval}\ncount: {dataCount}\n")
             for x in range(0, dataCount):
                 if eDataType:
                     dateTime = self.readInt64()
@@ -245,16 +249,16 @@ class HPLLoader:
                     end = ", "
                     if x == dataCount - 1:
                         end = ""
-                    output_file.write(f"{val}{end}") # NOTE: no conversions have been done. You can do the conversions based off the Enum15 type
+                    out.write(f"{val}{end}") # NOTE: no conversions have been done. You can do the conversions based off the Enum15 type
                 else: # things like "On/Off"
                     dateTime = self.readInt64()
                     strr = self.readString()
                     end = ", "
                     if x == dataCount - 1:
                         end = ""
-                    output_file.write(f"{strr}{end}")
-            output_file.write("\n")
-        output_file.close()
+                    out.write(f"{strr}{end}")
+            out.write("\n")
+        out.close()
         print("Done!")
 
 
